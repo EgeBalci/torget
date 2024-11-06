@@ -52,6 +52,7 @@ type State struct {
 	chunks      []chunk
 	done        chan int
 	log         chan string
+	headers     map[string]string
 	terminal    bool
 	rwmutex     sync.RWMutex
 }
@@ -65,8 +66,13 @@ func httpClient(user string) *http.Client {
 	}
 }
 
-func NewState(ctx context.Context, circuits int, minLifetime int, verbose bool) *State {
+func NewState(ctx context.Context, circuits int, minLifetime int, customHeader string, verbose bool) *State {
 	var s State
+	// Parse custom header into a map
+	headers := make(map[string]string)
+	parts := strings.Split(customHeader, ":")
+	headers[parts[0]] = parts[1]
+
 	s.circuits = circuits
 	s.minLifetime = time.Duration(minLifetime) * time.Second
 	s.verbose = verbose
@@ -102,6 +108,9 @@ func (s *State) chunkInit(id int) (client *http.Client, req *http.Request) {
 	req, _ = http.NewRequestWithContext(ctx, "GET", s.src, nil)
 	req.Header.Add("Range", fmt.Sprintf("bytes=%d-%d",
 		s.chunks[id].start, s.chunks[id].start+s.chunks[id].length-1))
+	for k, v := range s.headers {
+		req.Header.Add(k, v)
+	}
 	return
 }
 
@@ -414,12 +423,9 @@ func (s *State) Fetch(src string) int {
 func main() {
 	circuits := flag.Int("circuits", 20, "concurrent circuits")
 	minLifetime := flag.Int("min-lifetime", 10, "minimum circuit lifetime (seconds)")
+	customHeader := flag.String("H", "", "Custom HTTP header.")
 	verbose := flag.Bool("verbose", false, "diagnostic details")
 	flag.Usage = func() {
-		fmt.Fprintln(os.Stderr, "torget 2.0, a fast large file downloader over locally installed Tor")
-		fmt.Fprintln(os.Stderr, "Copyright © 2021-2023 Michał Trojnara <Michal.Trojnara@stunnel.org>")
-		fmt.Fprintln(os.Stderr, "Licensed under GNU/GPL version 3")
-		fmt.Fprintln(os.Stderr)
 		fmt.Fprintln(os.Stderr, "Usage: torget [FLAGS] URL")
 		flag.PrintDefaults()
 	}
@@ -428,8 +434,14 @@ func main() {
 		flag.Usage()
 		os.Exit(1)
 	}
+
+	if strings.Count(*customHeader, ":") < 1 {
+		fmt.Fprintln(os.Stderr, "Invalid header value!")
+		os.Exit(1)
+	}
+
 	ctx := context.Background()
-	state := NewState(ctx, *circuits, *minLifetime, *verbose)
+	state := NewState(ctx, *circuits, *minLifetime, *customHeader, *verbose)
 	context.Background()
 	os.Exit(state.Fetch(flag.Arg(0)))
 }
